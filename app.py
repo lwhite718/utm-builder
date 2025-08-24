@@ -143,6 +143,7 @@ def _next_id(df: pd.DataFrame) -> int:
 # High-level CRUD (campaigns / templates / utm_links)
 # =============================================================================
 
+@st.cache_data(ttl=30)  # Cache for 30 seconds
 def list_campaigns(ss) -> List[Dict]:
     df = _read_df(ss, "campaigns")
     return (
@@ -161,6 +162,9 @@ def create_campaign(ss, name: str) -> Optional[int]:
     new_id = _next_id(cdf)
     now = datetime.utcnow().isoformat()
     _append_rows(ss, "campaigns", [[str(new_id), name, now]])
+    
+    # Clear cache to refresh data
+    list_campaigns.clear()
     return new_id
 
 
@@ -172,6 +176,10 @@ def delete_campaign(ss, campaign_id: int) -> None:
     ldf = _read_df(ss, "utm_links")
     ldf = ldf[ldf["campaign_id"].astype(str) != str(campaign_id)]
     _write_df(ss, "utm_links", ldf)
+    
+    # Clear caches
+    list_campaigns.clear()
+    load_campaign_links.clear()
 
 
 def save_template(ss, name: str, source: str, medium: str, content: str = "", term: str = "") -> bool:
@@ -186,9 +194,13 @@ def save_template(ss, name: str, source: str, medium: str, content: str = "", te
     _append_rows(ss, "templates", [[
         str(new_id), name, source, medium, content, term, now
     ]])
+    
+    # Clear cache
+    list_templates.clear()
     return True
 
 
+@st.cache_data(ttl=30)  # Cache for 30 seconds  
 def list_templates(ss) -> pd.DataFrame:
     return _read_df(ss, "templates")
 
@@ -197,6 +209,9 @@ def delete_template(ss, template_id: int):
     tdf = _read_df(ss, "templates")
     tdf = tdf[tdf["id"].astype(str) != str(template_id)]
     _write_df(ss, "templates", tdf)
+    
+    # Clear cache
+    list_templates.clear()
 
 
 def insert_utm_links(ss, campaign_id: int, df: pd.DataFrame):
@@ -221,8 +236,12 @@ def insert_utm_links(ss, campaign_id: int, df: pd.DataFrame):
         next_id += 1
     if rows:
         _append_rows(ss, "utm_links", rows)
+        
+        # Clear cache for this campaign
+        load_campaign_links.clear()
 
 
+@st.cache_data(ttl=10)  # Cache for 10 seconds
 def load_campaign_links(ss, campaign_id: int) -> pd.DataFrame:
     df = _read_df(ss, "utm_links")
     df = df[df["campaign_id"].astype(str) == str(campaign_id)]
