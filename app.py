@@ -301,6 +301,7 @@ def sidebar_campaigns(ss_env: SheetsEnv):
                     st.session_state.selected_campaign_id = cid
                     st.session_state.new_campaign_name = ""
                     snack("Campaign created")
+                    st.rerun()
 
     campaigns = list_campaigns(ss_env.spreadsheet)
     options = {c["name"]: int(c["id"]) for c in campaigns}
@@ -336,10 +337,11 @@ def sidebar_campaigns(ss_env: SheetsEnv):
                 delete_campaign(ss_env.spreadsheet, st.session_state.selected_campaign_id)
                 st.session_state.selected_campaign_id = None
                 snack("Campaign deleted", icon="⚠️")
+                st.rerun()
 
 
 def sidebar_templates(ss_env: SheetsEnv):
-    st.sidebar.header("🔁 Template Manager")
+    st.sidebar.header("📝 Template Manager")
     with st.sidebar.form("template_form", clear_on_submit=True):
         t_name = st.text_input("Template name (e.g., LinkedIn CEO Social)")
         t_source = st.text_input("utm_source")
@@ -356,6 +358,7 @@ def sidebar_templates(ss_env: SheetsEnv):
                 ok = save_template(ss_env.spreadsheet, t_name, t_source, t_medium, t_content, t_term)
                 if ok:
                     snack("Template saved")
+                    st.rerun()
                 else:
                     st.error("A template with that name already exists.")
 
@@ -366,6 +369,7 @@ def sidebar_templates(ss_env: SheetsEnv):
         if to_delete and st.sidebar.button("Delete template"):
             delete_template(ss_env.spreadsheet, int(to_delete))
             snack("Template deleted", icon="🧹")
+            st.rerun()
     else:
         st.sidebar.caption("No templates saved yet.")
 
@@ -527,6 +531,8 @@ def bulk_builder(ss_env: SheetsEnv, force_lower: bool, space_style: str, templat
             else:
                 insert_utm_links(ss_env.spreadsheet, st.session_state.selected_campaign_id, to_save)
                 snack(f"Saved {len(to_save)} link(s) to campaign")
+        elif not st.session_state.selected_campaign_id:
+            st.info("Select or create a campaign in the sidebar to save links.")
     else:
         st.caption("Add some rows above to generate URLs.")
 
@@ -550,7 +556,7 @@ def chatgpt_insights_placeholder(campaign_id: int):
 # =============================================================================
 
 def main():
-    st.set_page_config(page_title="UTM Builder", page_icon="🔖", layout="wide")
+    st.set_page_config(page_title="UTM Builder", page_icon="📖", layout="wide")
     ensure_session_state()
 
     # Connect to Google Sheets
@@ -558,8 +564,7 @@ def main():
         ss_env = connect_sheets()
     except Exception as e:
         st.error(
-            "Google Sheets connection failed. Check Streamlit secrets (gcp_service_account and gsheets.*).
-"
+            "Google Sheets connection failed. Check Streamlit secrets (gcp_service_account and gsheets.*). "
             + str(e)
         )
         return
@@ -568,7 +573,7 @@ def main():
     sidebar_campaigns(ss_env)
     sidebar_templates(ss_env)
 
-    st.title("🔖 UTM Builder — Cloud Edition")
+    st.title("📖 UTM Builder — Cloud Edition")
     st.write("Create, format, and store UTM-tagged links under campaigns. Save and reuse templates. Export anytime.")
 
     # Formatting controls
