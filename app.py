@@ -286,9 +286,16 @@ def ensure_session_state():
 
 def sidebar_campaigns(ss_env: SheetsEnv):
     st.sidebar.header("📁 Campaigns/Projects")
+    
+    # Initialize clear flag in session state
+    if "clear_campaign_input" not in st.session_state:
+        st.session_state.clear_campaign_input = False
+    
     col1, col2 = st.sidebar.columns([3, 1])
     with col1:
-        new_name = st.text_input("New campaign name", key="new_campaign_name")
+        # Clear the input by using a different key when flag is set
+        input_key = "new_campaign_name_cleared" if st.session_state.clear_campaign_input else "new_campaign_name"
+        new_name = st.text_input("New campaign name", key=input_key)
     with col2:
         if st.button("Add", type="primary"):
             if not new_name.strip():
@@ -299,7 +306,8 @@ def sidebar_campaigns(ss_env: SheetsEnv):
                     st.error("A campaign with that name already exists.")
                 else:
                     st.session_state.selected_campaign_id = cid
-                    st.session_state.new_campaign_name = ""
+                    # Set flag to clear input on next run
+                    st.session_state.clear_campaign_input = not st.session_state.clear_campaign_input
                     snack("Campaign created")
                     st.rerun()
 
