@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
 from urllib.parse import urlsplit, urlunsplit, urlencode, parse_qsl
+import time
 
 import pandas as pd
 import streamlit as st
@@ -140,16 +141,67 @@ def _next_id(df: pd.DataFrame) -> int:
 
 
 # =============================================================================
+# Simple In-Memory Cache (No Streamlit Caching)
+# =============================================================================
+
+# Simple in-memory cache with timestamps
+_cache = {
+    "campaigns": {"data": None, "timestamp": 0, "ttl": 30},
+    "templates": {"data": None, "timestamp": 0, "ttl": 30}, 
+    "utm_links": {"data": {}, "timestamp": 0, "ttl": 10}  # keyed by campaign_id
+}
+
+def _is_cache_valid(cache_key: str) -> bool:
+    """Check if cache is still valid"""
+    cache_entry = _cache.get(cache_key, {})
+    if cache_entry.get("data") is None:
+        return False
+    return (time.time() - cache_entry.get("timestamp", 0)) < cache_entry.get("ttl", 0)
+
+def _set_cache(cache_key: str, data, campaign_id: int = None):
+    """Set cache data"""
+    if cache_key == "utm_links" and campaign_id is not None:
+        if "data" not in _cache[cache_key]:
+            _cache[cache_key]["data"] = {}
+        _cache[cache_key]["data"][campaign_id] = data
+    else:
+        _cache[cache_key]["data"] = data
+    _cache[cache_key]["timestamp"] = time.time()
+
+def _get_cache(cache_key: str, campaign_id: int = None):
+    """Get cache data"""
+    if cache_key == "utm_links" and campaign_id is not None:
+        return _cache[cache_key]["data"].get(campaign_id)
+    return _cache[cache_key]["data"]
+
+def _clear_cache(cache_key: str, campaign_id: int = None):
+    """Clear cache data"""
+    if cache_key == "utm_links" and campaign_id is not None:
+        if "data" in _cache[cache_key] and campaign_id in _cache[cache_key]["data"]:
+            del _cache[cache_key]["data"][campaign_id]
+    else:
+        _cache[cache_key]["data"] = None
+        _cache[cache_key]["timestamp"] = 0
+
+
+# =============================================================================
 # High-level CRUD (campaigns / templates / utm_links)
 # =============================================================================
 
-@st.cache_data(ttl=30)  # Cache for 30 seconds
 def list_campaigns(ss) -> List[Dict]:
+    # Check cache first
+    if _is_cache_valid("campaigns"):
+        cached_data = _get_cache("campaigns")
+        if cached_data is not None:
+            return cached_data
+    
+    # Fetch fresh data
     df = _read_df(ss, "campaigns")
-    return (
-        df.sort_values("created_at", ascending=False)
-        .to_dict(orient="records")
-    )
+    result = df.sort_values("created_at", ascending=False).to_dict(orient="records")
+    
+    # Cache the result
+    _set_cache("campaigns", result)
+    return result
 
 
 def create_campaign(ss, name: str) -> Optional[int]:
@@ -164,7 +216,7 @@ def create_campaign(ss, name: str) -> Optional[int]:
     _append_rows(ss, "campaigns", [[str(new_id), name, now]])
     
     # Clear cache to refresh data
-    list_campaigns.clear()
+    _clear_cache("campaigns")
     return new_id
 
 
@@ -178,8 +230,8 @@ def delete_campaign(ss, campaign_id: int) -> None:
     _write_df(ss, "utm_links", ldf)
     
     # Clear caches
-    list_campaigns.clear()
-    load_campaign_links.clear()
+    _clear_cache("campaigns")
+    _clear_cache("utm_links", campaign_id)
 
 
 def save_template(ss, name: str, source: str, medium: str, content: str = "", term: str = "") -> bool:
@@ -196,13 +248,23 @@ def save_template(ss, name: str, source: str, medium: str, content: str = "", te
     ]])
     
     # Clear cache
-    list_templates.clear()
+    _clear_cache("templates")
     return True
 
 
-@st.cache_data(ttl=30)  # Cache for 30 seconds  
 def list_templates(ss) -> pd.DataFrame:
-    return _read_df(ss, "templates")
+    # Check cache first
+    if _is_cache_valid("templates"):
+        cached_data = _get_cache("templates")
+        if cached_data is not None:
+            return cached_data
+    
+    # Fetch fresh data
+    result = _read_df(ss, "templates")
+    
+    # Cache the result
+    _set_cache("templates", result)
+    return result
 
 
 def delete_template(ss, template_id: int):
@@ -211,7 +273,7 @@ def delete_template(ss, template_id: int):
     _write_df(ss, "templates", tdf)
     
     # Clear cache
-    list_templates.clear()
+    _clear_cache("templates")
 
 
 def insert_utm_links(ss, campaign_id: int, df: pd.DataFrame):
@@ -238,16 +300,27 @@ def insert_utm_links(ss, campaign_id: int, df: pd.DataFrame):
         _append_rows(ss, "utm_links", rows)
         
         # Clear cache for this campaign
-        load_campaign_links.clear()
+        _clear_cache("utm_links", campaign_id)
 
 
-@st.cache_data(ttl=10)  # Cache for 10 seconds
 def load_campaign_links(ss, campaign_id: int) -> pd.DataFrame:
+    # Check cache first
+    if _is_cache_valid("utm_links"):
+        cached_data = _get_cache("utm_links", campaign_id)
+        if cached_data is not None:
+            return cached_data
+    
+    # Fetch fresh data
     df = _read_df(ss, "utm_links")
     df = df[df["campaign_id"].astype(str) == str(campaign_id)]
     if df.empty:
-        return df
-    return df.sort_values("created_at", ascending=False).reset_index(drop=True)
+        result = df
+    else:
+        result = df.sort_values("created_at", ascending=False).reset_index(drop=True)
+    
+    # Cache the result
+    _set_cache("utm_links", result, campaign_id)
+    return result
 
 
 # =============================================================================
