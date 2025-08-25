@@ -753,9 +753,8 @@ def main():
         )
         return
 
-    # Sidebars
+    # Sidebar (campaigns only now)
     sidebar_campaigns(ss_env)
-    sidebar_templates(ss_env)
 
     st.title("📖 UTM Builder — Cloud Edition")
     st.write("Create, format, and store UTM-tagged links under campaigns. Save and reuse templates. Export anytime.")
@@ -766,8 +765,8 @@ def main():
     # Load templates for use in builders
     templates_df = list_templates(ss_env.spreadsheet)
 
-    # Tabs: Single / Bulk / Campaign Links
-    t1, t2, t3 = st.tabs(["Single", "Bulk", "Campaign Links"])
+    # Main tabs: Single / Bulk / Campaign Links / Presets
+    t1, t2, t3, t4 = st.tabs(["Single", "Bulk", "Campaign Links", "Presets"])
 
     with t1:
         single_builder(ss_env, force_lower, space_style, templates_df)
@@ -784,6 +783,9 @@ def main():
                 st.dataframe(links_df, use_container_width=True, hide_index=True)
         else:
             st.info("Select a campaign in the sidebar to view its links.")
+            
+    with t4:
+        presets_tab(ss_env)
 
     st.divider()
     with st.expander("Integrations (coming soon)"):
