@@ -449,8 +449,10 @@ def sidebar_campaigns(ss_env: SheetsEnv):
                 st.rerun()
 
 
-def sidebar_templates(ss_env: SheetsEnv):
-    st.sidebar.header("📝 Template Manager")
+def presets_tab(ss_env: SheetsEnv):
+    """Template management moved to a main tab"""
+    st.header("📝 Template Presets")
+    st.caption("Create and manage reusable UTM templates organized by category.")
     
     # Template categories
     template_categories = [
@@ -458,25 +460,29 @@ def sidebar_templates(ss_env: SheetsEnv):
         "PR/Outreach", "Partnerships", "Events", "Direct Marketing", "Other"
     ]
     
-    with st.sidebar.form("template_form", clear_on_submit=True):
-        t_name = st.text_input("Template name", placeholder="e.g., LinkedIn CEO Social")
-        t_category = st.selectbox("Category", options=template_categories, index=0)
-        
+    # Create new template section
+    st.subheader("Create New Template")
+    with st.form("template_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            t_source = st.text_input("utm_source", placeholder="e.g., linkedin")
+            t_name = st.text_input("Template name", placeholder="e.g., LinkedIn CEO Social")
+            t_category = st.selectbox("Category", options=template_categories, index=0)
         with col2:
+            t_source = st.text_input("utm_source", placeholder="e.g., linkedin")
             t_medium = st.text_input("utm_medium", placeholder="e.g., social")
         
-        t_content = st.text_input("utm_content (optional)", placeholder="e.g., ceo-post")
-        t_term = st.text_input("utm_term (optional)", placeholder="e.g., brand-awareness")
+        col3, col4 = st.columns(2)
+        with col3:
+            t_content = st.text_input("utm_content (optional)", placeholder="e.g., ceo-post")
+        with col4:
+            t_term = st.text_input("utm_term (optional)", placeholder="e.g., brand-awareness")
         
-        submitted = st.form_submit_button("Save template")
+        submitted = st.form_submit_button("Save Template", type="primary")
         if submitted:
             if not t_name.strip():
-                st.warning("Template needs a name.")
+                st.error("Template needs a name.")
             elif not t_source.strip() or not t_medium.strip():
-                st.warning("Source and medium are required for a template.")
+                st.error("Source and medium are required for a template.")
             else:
                 ok = save_template(ss_env.spreadsheet, t_name, t_category, t_source, t_medium, t_content, t_term)
                 if ok:
@@ -485,35 +491,45 @@ def sidebar_templates(ss_env: SheetsEnv):
                 else:
                     st.error("A template with that name already exists.")
 
+    st.divider()
+
+    # Display existing templates
     df = list_templates(ss_env.spreadsheet)
     if not df.empty:
-        # Group templates by category
-        st.sidebar.subheader("Saved Templates")
+        st.subheader("Saved Templates")
         
-        # Filter by category
-        categories = ["All"] + sorted(df["category"].unique().tolist())
-        selected_category = st.sidebar.selectbox("Filter by category", options=categories, index=0)
-        
+        # Filter controls
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            categories = ["All"] + sorted(df["category"].unique().tolist())
+            selected_category = st.selectbox("Filter by category", options=categories, index=0)
+        with col2:
+            st.write("")  # spacer
+            
         if selected_category != "All":
             filtered_df = df[df["category"] == selected_category]
         else:
             filtered_df = df
             
         if not filtered_df.empty:
-            display_cols = ["id", "name", "category", "source", "medium"]
-            st.sidebar.dataframe(filtered_df[display_cols], use_container_width=True, hide_index=True)
+            display_cols = ["id", "name", "category", "source", "medium", "content", "term"]
+            st.dataframe(filtered_df[display_cols], use_container_width=True, hide_index=True)
+            
+            # Delete template section
+            st.subheader("Delete Template")
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                to_delete = st.number_input("Template ID to delete", min_value=0, step=1, value=0)
+            with col2:
+                st.write("")  # spacer
+                if to_delete and st.button("Delete Template", type="secondary"):
+                    delete_template(ss_env.spreadsheet, int(to_delete))
+                    snack("Template deleted", icon="🧹")
+                    st.rerun()
         else:
-            st.sidebar.caption(f"No templates in {selected_category} category.")
-        
-        # Delete template
-        if not df.empty:
-            to_delete = st.sidebar.number_input("Delete template by ID", min_value=0, step=1, value=0)
-            if to_delete and st.sidebar.button("Delete template"):
-                delete_template(ss_env.spreadsheet, int(to_delete))
-                snack("Template deleted", icon="🧹")
-                st.rerun()
+            st.info(f"No templates in {selected_category} category.")
     else:
-        st.sidebar.caption("No templates saved yet.")
+        st.info("No templates saved yet. Create your first template above.")
 
 
 # =============================================================================
@@ -556,11 +572,11 @@ def single_builder(ss_env: SheetsEnv, force_lower: bool, space_style: str, templ
             value=suggested_utm_campaign,
             help="Auto-suggested from selected campaign name"
         )
-        utm_source = st.text_input("utm_source", value=t_row["source"].iloc[0] if not t_row.empty else "")
-        utm_medium = st.text_input("utm_medium", value=t_row["medium"].iloc[0] if not t_row.empty else "")
+        utm_source = st.text_input("utm_source", value=apply_formatting(t_row["source"].iloc[0] if not t_row.empty else "", force_lower, space_style))
+        utm_medium = st.text_input("utm_medium", value=apply_formatting(t_row["medium"].iloc[0] if not t_row.empty else "", force_lower, space_style))
     with c2:
-        utm_content = st.text_input("utm_content", value=t_row["content"].iloc[0] if not t_row.empty else "")
-        utm_term = st.text_input("utm_term", value=t_row["term"].iloc[0] if not t_row.empty else "")
+        utm_content = st.text_input("utm_content", value=apply_formatting(t_row["content"].iloc[0] if not t_row.empty else "", force_lower, space_style))
+        utm_term = st.text_input("utm_term", value=apply_formatting(t_row["term"].iloc[0] if not t_row.empty else "", force_lower, space_style))
 
     f_campaign = apply_formatting(utm_campaign, force_lower, space_style)
     f_source = apply_formatting(utm_source, force_lower, space_style)
