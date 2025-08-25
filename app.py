@@ -20,6 +20,7 @@ import time
 
 import pandas as pd
 import streamlit as st
+import requests
 
 # --- Google Sheets (gspread) ---
 import gspread
