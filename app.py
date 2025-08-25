@@ -325,6 +325,95 @@ def load_campaign_links(ss, campaign_id: int) -> pd.DataFrame:
     return result
 
 
+def update_utm_link(ss, link_id: int, updated_data: Dict) -> bool:
+    """Update an existing UTM link"""
+    try:
+        ldf = _read_df(ss, "utm_links")
+        link_idx = ldf[ldf["id"].astype(str) == str(link_id)].index
+        
+        if link_idx.empty:
+            return False
+            
+        # Update the row
+        for key, value in updated_data.items():
+            if key in ldf.columns:
+                ldf.loc[link_idx[0], key] = str(value)
+        
+        _write_df(ss, "utm_links", ldf)
+        
+        # Clear cache
+        campaign_id = int(ldf.loc[link_idx[0], "campaign_id"])
+        _clear_cache("utm_links", campaign_id)
+        return True
+    except Exception:
+        return False
+
+
+def delete_utm_link(ss, link_id: int) -> bool:
+    """Delete a UTM link"""
+    try:
+        ldf = _read_df(ss, "utm_links")
+        campaign_id_row = ldf[ldf["id"].astype(str) == str(link_id)]
+        
+        if campaign_id_row.empty:
+            return False
+            
+        campaign_id = int(campaign_id_row["campaign_id"].iloc[0])
+        ldf = ldf[ldf["id"].astype(str) != str(link_id)]
+        _write_df(ss, "utm_links", ldf)
+        
+        # Clear cache
+        _clear_cache("utm_links", campaign_id)
+        return True
+    except Exception:
+        return False
+
+
+def duplicate_campaign(ss, campaign_id: int, new_name: str) -> Optional[int]:
+    """Duplicate a campaign with all its links"""
+    try:
+        # Get original campaign
+        cdf = _read_df(ss, "campaigns")
+        original_campaign = cdf[cdf["id"].astype(str) == str(campaign_id)]
+        
+        if original_campaign.empty:
+            return None
+            
+        # Create new campaign
+        new_campaign_id = create_campaign(ss, new_name)
+        if new_campaign_id is None:
+            return None
+            
+        # Duplicate all links
+        links_df = load_campaign_links(ss, campaign_id)
+        if not links_df.empty:
+            # Prepare links for insertion (remove id and update campaign_id)
+            links_to_duplicate = links_df.drop(columns=["id", "created_at"]).copy()
+            links_to_duplicate["campaign_id"] = new_campaign_id
+            
+            # Regenerate final URLs with new campaign name
+            new_campaign_name = generate_campaign_utm_name(new_name)
+            for idx, row in links_to_duplicate.iterrows():
+                if row["utm_campaign"] == generate_campaign_utm_name(original_campaign["name"].iloc[0]):
+                    links_to_duplicate.at[idx, "utm_campaign"] = new_campaign_name
+                    
+                # Rebuild final URL
+                params = {
+                    "utm_campaign": links_to_duplicate.at[idx, "utm_campaign"],
+                    "utm_source": links_to_duplicate.at[idx, "utm_source"],
+                    "utm_medium": links_to_duplicate.at[idx, "utm_medium"],
+                    "utm_content": links_to_duplicate.at[idx, "utm_content"],
+                    "utm_term": links_to_duplicate.at[idx, "utm_term"],
+                }
+                links_to_duplicate.at[idx, "final_url"] = build_utm_url(row["base_url"], params)
+            
+            insert_utm_links(ss, new_campaign_id, links_to_duplicate)
+            
+        return new_campaign_id
+    except Exception:
+        return None
+
+
 # =============================================================================
 # UTM + Formatting Helpers
 # =============================================================================
@@ -440,6 +529,19 @@ def sidebar_campaigns(ss_env: SheetsEnv):
             else:
                 st.caption("No links in this campaign yet.")
 
+            st.divider()
+            
+            # Duplicate campaign
+            duplicate_name = st.text_input("Duplicate campaign as:", placeholder="New campaign name")
+            if duplicate_name.strip() and st.button("📋 Duplicate Campaign"):
+                new_id = duplicate_campaign(ss_env.spreadsheet, st.session_state.selected_campaign_id, duplicate_name.strip())
+                if new_id:
+                    st.session_state.selected_campaign_id = new_id
+                    snack(f"Campaign duplicated as '{duplicate_name}'")
+                    st.rerun()
+                else:
+                    st.error("Failed to duplicate campaign or name already exists.")
+            
             st.divider()
             danger = st.checkbox("Enable delete", value=False)
             if danger and st.button("🗑️ Delete campaign", type="secondary"):
@@ -594,6 +696,20 @@ def single_builder(ss_env: SheetsEnv, force_lower: bool, space_style: str, templ
 
     final_url = build_utm_url(base_url, params)
     st.code(final_url or "(URL preview will appear here)")
+
+    # URL Testing Section
+    if final_url:
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("Test URL", help="Check if URL is accessible (returns 200 status)"):
+                with st.spinner("Testing URL..."):
+                    is_success, message, status_code = test_url_status(final_url)
+                    if is_success:
+                        st.success(f"✅ {message}")
+                    else:
+                        st.error(f"❌ {message}")
+        with col2:
+            st.caption("Test the generated URL to verify it's accessible before saving.")
 
     if st.session_state.selected_campaign_id and final_url:
         if st.button("Save to selected campaign"):
@@ -774,15 +890,174 @@ def main():
     with t2:
         bulk_builder(ss_env, force_lower, space_style, templates_df)
 
-    with t3:
-        if st.session_state.selected_campaign_id:
-            links_df = load_campaign_links(ss_env.spreadsheet, st.session_state.selected_campaign_id)
-            if links_df.empty:
-                st.info("No links yet in this campaign.")
-            else:
-                st.dataframe(links_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("Select a campaign in the sidebar to view its links.")
+def campaign_links_tab(ss_env: SheetsEnv):
+    """Enhanced Campaign Links tab with editing and search features"""
+    if not st.session_state.selected_campaign_id:
+        st.info("Select a campaign in the sidebar to view its links.")
+        return
+        
+    # Get current campaign info
+    campaigns = list_campaigns(ss_env.spreadsheet)
+    selected_campaign = next((c for c in campaigns if c["id"] == st.session_state.selected_campaign_id), None)
+    if not selected_campaign:
+        st.error("Selected campaign not found.")
+        return
+        
+    st.subheader(f"Links for: {selected_campaign['name']}")
+    
+    # Load links
+    links_df = load_campaign_links(ss_env.spreadsheet, st.session_state.selected_campaign_id)
+    
+    if links_df.empty:
+        st.info("No links yet in this campaign. Create some in the Single or Bulk tabs!")
+        return
+    
+    # Search and filter controls
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        search_term = st.text_input("Search links", placeholder="Search in URLs, source, medium...")
+    with col2:
+        source_filter = st.selectbox("Filter by source", options=["All"] + sorted(links_df["utm_source"].unique().tolist()))
+    with col3:
+        medium_filter = st.selectbox("Filter by medium", options=["All"] + sorted(links_df["utm_medium"].unique().tolist()))
+    
+    # Apply filters
+    filtered_df = links_df.copy()
+    
+    if search_term:
+        mask = (
+            filtered_df["final_url"].str.contains(search_term, case=False, na=False) |
+            filtered_df["base_url"].str.contains(search_term, case=False, na=False) |
+            filtered_df["utm_source"].str.contains(search_term, case=False, na=False) |
+            filtered_df["utm_medium"].str.contains(search_term, case=False, na=False) |
+            filtered_df["utm_content"].str.contains(search_term, case=False, na=False)
+        )
+        filtered_df = filtered_df[mask]
+    
+    if source_filter != "All":
+        filtered_df = filtered_df[filtered_df["utm_source"] == source_filter]
+    
+    if medium_filter != "All":
+        filtered_df = filtered_df[filtered_df["utm_medium"] == medium_filter]
+    
+    # Display results count
+    st.caption(f"Showing {len(filtered_df)} of {len(links_df)} links")
+    
+    if filtered_df.empty:
+        st.info("No links match your search criteria.")
+        return
+    
+    # Link management section
+    st.subheader("Manage Links")
+    
+    # Display links with action buttons
+    for idx, row in filtered_df.iterrows():
+        with st.expander(f"🔗 {row['base_url'][:50]}..." if len(row['base_url']) > 50 else f"🔗 {row['base_url']}", expanded=False):
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                # Display link details
+                st.write(f"**Final URL:** `{row['final_url']}`")
+                st.write(f"**UTM Source:** {row['utm_source']} | **Medium:** {row['utm_medium']}")
+                if row['utm_content'] or row['utm_term']:
+                    st.write(f"**Content:** {row['utm_content']} | **Term:** {row['utm_term']}")
+                st.write(f"**Created:** {row['created_at'][:10]}")
+            
+            with col2:
+                # Action buttons
+                if st.button(f"✏️ Edit", key=f"edit_{row['id']}"):
+                    st.session_state[f"editing_{row['id']}"] = True
+                    st.rerun()
+                
+                if st.button(f"🗑️ Delete", key=f"delete_{row['id']}", type="secondary"):
+                    if delete_utm_link(ss_env.spreadsheet, int(row['id'])):
+                        snack("Link deleted")
+                        st.rerun()
+                    else:
+                        st.error("Failed to delete link")
+                
+                if st.button(f"🧪 Test", key=f"test_{row['id']}"):
+                    with st.spinner("Testing..."):
+                        is_success, message, status_code = test_url_status(row['final_url'])
+                        if is_success:
+                            st.success(f"✅ {message}")
+                        else:
+                            st.error(f"❌ {message}")
+            
+            # Edit form (appears when edit button is clicked)
+            if st.session_state.get(f"editing_{row['id']}", False):
+                st.divider()
+                st.write("**Edit Link:**")
+                
+                with st.form(f"edit_form_{row['id']}"):
+                    edit_base_url = st.text_input("Base URL", value=row['base_url'])
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        edit_campaign = st.text_input("utm_campaign", value=row['utm_campaign'])
+                        edit_source = st.text_input("utm_source", value=row['utm_source'])
+                        edit_medium = st.text_input("utm_medium", value=row['utm_medium'])
+                    with col2:
+                        edit_content = st.text_input("utm_content", value=row['utm_content'])
+                        edit_term = st.text_input("utm_term", value=row['utm_term'])
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.form_submit_button("Save Changes", type="primary"):
+                            # Rebuild final URL
+                            new_params = {
+                                "utm_campaign": edit_campaign,
+                                "utm_source": edit_source,
+                                "utm_medium": edit_medium,
+                                "utm_content": edit_content,
+                                "utm_term": edit_term,
+                            }
+                            new_final_url = build_utm_url(edit_base_url, new_params)
+                            
+                            # Update the link
+                            updated_data = {
+                                "base_url": edit_base_url,
+                                "utm_campaign": edit_campaign,
+                                "utm_source": edit_source,
+                                "utm_medium": edit_medium,
+                                "utm_content": edit_content,
+                                "utm_term": edit_term,
+                                "final_url": new_final_url,
+                            }
+                            
+                            if update_utm_link(ss_env.spreadsheet, int(row['id']), updated_data):
+                                st.session_state[f"editing_{row['id']}"] = False
+                                snack("Link updated")
+                                st.rerun()
+                            else:
+                                st.error("Failed to update link")
+                    
+                    with col2:
+                        if st.form_submit_button("Cancel"):
+                            st.session_state[f"editing_{row['id']}"] = False
+                            st.rerun()
+    
+    # Click tracking preparation
+    st.divider()
+    with st.expander("🔍 Click Tracking Setup", expanded=False):
+        st.write("**Prepare your links for click tracking:**")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Google Analytics:**")
+            st.code("gtag('event', 'utm_click', {'campaign_name': 'your-campaign'});")
+            
+            st.write("**Facebook Pixel:**")
+            st.code("fbq('trackCustom', 'UTMClick', {'campaign': 'your-campaign'});")
+        
+        with col2:
+            st.write("**URL Shortening Services:**")
+            st.write("- Bit.ly: Has built-in analytics")
+            st.write("- TinyURL: Basic click counting")
+            st.write("- Custom: Use your own domain with tracking")
+            
+            st.write("**Redirect Setup:**")
+            st.write("Create a redirect script that logs clicks before forwarding to your UTM URLs.")
             
     with t4:
         presets_tab(ss_env)
