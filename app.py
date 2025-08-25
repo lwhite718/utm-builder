@@ -1,6 +1,7 @@
 """
 Streamlit UTM Builder (MVP, Streamlit Cloud edition)
 Author: ED: Dev Wizard
+Version: 2.0 - NO CACHING VERSION
 
 Persistence: Google Sheets via Service Account (Streamlit Cloud friendly)
 - Tabs: campaigns, templates, utm_links
@@ -30,7 +31,7 @@ from google.oauth2.service_account import Credentials
 
 REQ_TABS = {
     "campaigns": ["id", "name", "created_at"],
-    "templates": ["id", "name", "source", "medium", "content", "term", "created_at"],
+    "templates": ["id", "name", "category", "source", "medium", "content", "term", "created_at"],
     "utm_links": [
         "id",
         "campaign_id",
@@ -234,8 +235,9 @@ def delete_campaign(ss, campaign_id: int) -> None:
     _clear_cache("utm_links", campaign_id)
 
 
-def save_template(ss, name: str, source: str, medium: str, content: str = "", term: str = "") -> bool:
+def save_template(ss, name: str, category: str, source: str, medium: str, content: str = "", term: str = "") -> bool:
     name = name.strip()
+    category = category.strip()
     if not name or not source.strip() or not medium.strip():
         return False
     tdf = _read_df(ss, "templates")
@@ -244,7 +246,7 @@ def save_template(ss, name: str, source: str, medium: str, content: str = "", te
     new_id = _next_id(tdf)
     now = datetime.utcnow().isoformat()
     _append_rows(ss, "templates", [[
-        str(new_id), name, source, medium, content, term, now
+        str(new_id), name, category, source, medium, content, term, now
     ]])
     
     # Clear cache
@@ -338,6 +340,13 @@ def apply_formatting(value: str, force_lower: bool, space_style: str) -> str:
     elif space_style == "_":
         s = s.replace(" ", "_")
     return s
+
+
+def generate_campaign_utm_name(campaign_name: str) -> str:
+    """Generate utm_campaign name from campaign name: lowercase with hyphens"""
+    if not campaign_name:
+        return ""
+    return campaign_name.strip().lower().replace(" ", "-")
 
 
 def build_utm_url(base_url: str, params: Dict[str, str]) -> str:
@@ -442,12 +451,26 @@ def sidebar_campaigns(ss_env: SheetsEnv):
 
 def sidebar_templates(ss_env: SheetsEnv):
     st.sidebar.header("📝 Template Manager")
+    
+    # Template categories
+    template_categories = [
+        "Social Media", "Email Marketing", "Paid Ads", "Content Marketing", 
+        "PR/Outreach", "Partnerships", "Events", "Direct Marketing", "Other"
+    ]
+    
     with st.sidebar.form("template_form", clear_on_submit=True):
-        t_name = st.text_input("Template name (e.g., LinkedIn CEO Social)")
-        t_source = st.text_input("utm_source")
-        t_medium = st.text_input("utm_medium")
-        t_content = st.text_input("utm_content", value="")
-        t_term = st.text_input("utm_term", value="")
+        t_name = st.text_input("Template name", placeholder="e.g., LinkedIn CEO Social")
+        t_category = st.selectbox("Category", options=template_categories, index=0)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            t_source = st.text_input("utm_source", placeholder="e.g., linkedin")
+        with col2:
+            t_medium = st.text_input("utm_medium", placeholder="e.g., social")
+        
+        t_content = st.text_input("utm_content (optional)", placeholder="e.g., ceo-post")
+        t_term = st.text_input("utm_term (optional)", placeholder="e.g., brand-awareness")
+        
         submitted = st.form_submit_button("Save template")
         if submitted:
             if not t_name.strip():
@@ -455,7 +478,7 @@ def sidebar_templates(ss_env: SheetsEnv):
             elif not t_source.strip() or not t_medium.strip():
                 st.warning("Source and medium are required for a template.")
             else:
-                ok = save_template(ss_env.spreadsheet, t_name, t_source, t_medium, t_content, t_term)
+                ok = save_template(ss_env.spreadsheet, t_name, t_category, t_source, t_medium, t_content, t_term)
                 if ok:
                     snack("Template saved")
                     st.rerun()
@@ -464,12 +487,31 @@ def sidebar_templates(ss_env: SheetsEnv):
 
     df = list_templates(ss_env.spreadsheet)
     if not df.empty:
-        st.sidebar.dataframe(df[["id", "name", "source", "medium"]], use_container_width=True, hide_index=True)
-        to_delete = st.sidebar.number_input("Delete template by ID", min_value=0, step=1, value=0)
-        if to_delete and st.sidebar.button("Delete template"):
-            delete_template(ss_env.spreadsheet, int(to_delete))
-            snack("Template deleted", icon="🧹")
-            st.rerun()
+        # Group templates by category
+        st.sidebar.subheader("Saved Templates")
+        
+        # Filter by category
+        categories = ["All"] + sorted(df["category"].unique().tolist())
+        selected_category = st.sidebar.selectbox("Filter by category", options=categories, index=0)
+        
+        if selected_category != "All":
+            filtered_df = df[df["category"] == selected_category]
+        else:
+            filtered_df = df
+            
+        if not filtered_df.empty:
+            display_cols = ["id", "name", "category", "source", "medium"]
+            st.sidebar.dataframe(filtered_df[display_cols], use_container_width=True, hide_index=True)
+        else:
+            st.sidebar.caption(f"No templates in {selected_category} category.")
+        
+        # Delete template
+        if not df.empty:
+            to_delete = st.sidebar.number_input("Delete template by ID", min_value=0, step=1, value=0)
+            if to_delete and st.sidebar.button("Delete template"):
+                delete_template(ss_env.spreadsheet, int(to_delete))
+                snack("Template deleted", icon="🧹")
+                st.rerun()
     else:
         st.sidebar.caption("No templates saved yet.")
 
@@ -495,13 +537,25 @@ def single_builder(ss_env: SheetsEnv, force_lower: bool, space_style: str, templ
     st.subheader("🔗 Single UTM Builder")
     base_url = st.text_input("Base URL", placeholder="https://example.com/page")
 
+    # Get suggested utm_campaign from selected campaign
+    suggested_utm_campaign = ""
+    if st.session_state.selected_campaign_id:
+        campaigns = list_campaigns(ss_env.spreadsheet)
+        selected_campaign = next((c for c in campaigns if c["id"] == st.session_state.selected_campaign_id), None)
+        if selected_campaign:
+            suggested_utm_campaign = generate_campaign_utm_name(selected_campaign["name"])
+
     template_names = ["(none)"] + templates_df["name"].tolist() if not templates_df.empty else ["(none)"]
     t_choice = st.selectbox("Apply template", options=template_names)
     t_row = templates_df[templates_df["name"] == t_choice].head(1) if t_choice != "(none)" and not templates_df.empty else pd.DataFrame()
 
     c1, c2 = st.columns(2)
     with c1:
-        utm_campaign = st.text_input("utm_campaign")
+        utm_campaign = st.text_input(
+            "utm_campaign", 
+            value=suggested_utm_campaign,
+            help="Auto-suggested from selected campaign name"
+        )
         utm_source = st.text_input("utm_source", value=t_row["source"].iloc[0] if not t_row.empty else "")
         utm_medium = st.text_input("utm_medium", value=t_row["medium"].iloc[0] if not t_row.empty else "")
     with c2:
@@ -548,7 +602,21 @@ def bulk_builder(ss_env: SheetsEnv, force_lower: bool, space_style: str, templat
     st.subheader("📦 Bulk UTM Builder")
     st.caption("Use the table to add multiple rows. You can apply a template to any row.")
 
+    # Get suggested utm_campaign from selected campaign
+    suggested_utm_campaign = ""
+    if st.session_state.selected_campaign_id:
+        campaigns = list_campaigns(ss_env.spreadsheet)
+        selected_campaign = next((c for c in campaigns if c["id"] == st.session_state.selected_campaign_id), None)
+        if selected_campaign:
+            suggested_utm_campaign = generate_campaign_utm_name(selected_campaign["name"])
+
     df = st.session_state.bulk_df.copy()
+
+    # Pre-populate utm_campaign with suggested value for new rows
+    if suggested_utm_campaign:
+        for i in df.index:
+            if not df.at[i, "utm_campaign"]:
+                df.at[i, "utm_campaign"] = suggested_utm_campaign
 
     for col in ["base_url", "utm_campaign", "utm_source", "utm_medium", "utm_content", "utm_term", "template"]:
         if col not in df.columns:
@@ -565,7 +633,7 @@ def bulk_builder(ss_env: SheetsEnv, force_lower: bool, space_style: str, templat
         use_container_width=True,
         column_config={
             "base_url": st.column_config.TextColumn("base_url", help="The page URL you want to tag."),
-            "utm_campaign": st.column_config.TextColumn("utm_campaign"),
+            "utm_campaign": st.column_config.TextColumn("utm_campaign", help="Auto-suggested from campaign name"),
             "utm_source": st.column_config.TextColumn("utm_source"),
             "utm_medium": st.column_config.TextColumn("utm_medium"),
             "utm_content": st.column_config.TextColumn("utm_content"),
