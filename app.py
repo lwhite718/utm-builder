@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional
-from urllib.parse import urlsplit, urlunsplit, urlencode, parse_qsl
+from urllib.parse import urlsplit, urlunsplit, urlencode, parse_qsl, urlparse
 import time
 
 import pandas as pd
