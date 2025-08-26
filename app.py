@@ -459,6 +459,39 @@ def snack(msg: str, icon: str = "✅"):
     st.toast(msg, icon=icon)
 
 
+def test_url_status(url: str) -> tuple[bool, str, int]:
+    """
+    Test URL format and basic validation (no HTTP requests to avoid deployment issues)
+    Returns: (is_success, message, status_code)
+    """
+    if not url.strip():
+        return False, "Empty URL", 0
+    
+    try:
+        # Add protocol if missing
+        test_url = url
+        if not test_url.startswith(('http://', 'https://')):
+            test_url = 'https://' + test_url
+        
+        # Validate URL format
+        parsed = urlparse(test_url)
+        if not parsed.netloc:
+            return False, "Invalid URL format", 0
+        
+        # Check for common issues
+        if len(parsed.netloc) < 3:
+            return False, "Domain too short", 0
+        
+        if not ('.' in parsed.netloc):
+            return False, "Invalid domain format", 0
+        
+        # Basic validation passed
+        return True, "URL format is valid", 200
+            
+    except Exception as e:
+        return False, f"URL validation error: {str(e)[:30]}", 0
+
+
 def ensure_session_state():
     if "selected_campaign_id" not in st.session_state:
         st.session_state.selected_campaign_id = None
