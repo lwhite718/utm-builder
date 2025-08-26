@@ -702,15 +702,15 @@ def single_builder(ss_env: SheetsEnv, force_lower: bool, space_style: str, templ
     if final_url:
         col1, col2 = st.columns([1, 4])
         with col1:
-            if st.button("Test URL", help="Check if URL is accessible (returns 200 status)"):
-                with st.spinner("Testing URL..."):
+            if st.button("Test URL", help="Validate URL format and structure"):
+                with st.spinner("Validating URL..."):
                     is_success, message, status_code = test_url_status(final_url)
                     if is_success:
                         st.success(f"✅ {message}")
                     else:
                         st.error(f"❌ {message}")
         with col2:
-            st.caption("Test the generated URL to verify it's accessible before saving.")
+            st.caption("Validates URL format and basic structure (no live HTTP test to avoid deployment issues).")
 
     if st.session_state.selected_campaign_id and final_url:
         if st.button("Save to selected campaign"):
@@ -978,7 +978,7 @@ def campaign_links_tab(ss_env: SheetsEnv):
                         st.error("Failed to delete link")
                 
                 if st.button(f"🧪 Test", key=f"test_{row['id']}"):
-                    with st.spinner("Testing..."):
+                    with st.spinner("Validating..."):
                         is_success, message, status_code = test_url_status(row['final_url'])
                         if is_success:
                             st.success(f"✅ {message}")
