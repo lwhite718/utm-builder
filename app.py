@@ -940,7 +940,11 @@ def campaign_links_tab(ss_env: SheetsEnv):
     st.subheader(f"Links for: {selected_campaign['name']}")
     
     # Load links
-    links_df = load_campaign_links(ss_env.spreadsheet, st.session_state.selected_campaign_id)
+    try:
+        links_df = load_campaign_links(ss_env.spreadsheet, st.session_state.selected_campaign_id)
+    except Exception as e:
+        st.error(f"Error loading campaign links: {str(e)}")
+        return
     
     if links_df.empty:
         st.info("No links yet in this campaign. Create some in the Single or Bulk tabs!")
@@ -981,117 +985,30 @@ def campaign_links_tab(ss_env: SheetsEnv):
         st.info("No links match your search criteria.")
         return
     
-    # Link management section
-    st.subheader("Manage Links")
+    # Display links in a simple table format for now
+    st.subheader("Campaign Links")
+    display_columns = ["id", "base_url", "utm_source", "utm_medium", "utm_content", "utm_term", "final_url", "created_at"]
+    st.dataframe(filtered_df[display_columns], use_container_width=True, hide_index=True)
     
-    # Display links with action buttons
-    for idx, row in filtered_df.iterrows():
-        with st.expander(f"🔗 {row['base_url'][:50]}..." if len(row['base_url']) > 50 else f"🔗 {row['base_url']}", expanded=False):
-            col1, col2 = st.columns([3, 1])
-            
-            with col1:
-                # Display link details
-                st.write(f"**Final URL:** `{row['final_url']}`")
-                st.write(f"**UTM Source:** {row['utm_source']} | **Medium:** {row['utm_medium']}")
-                if row['utm_content'] or row['utm_term']:
-                    st.write(f"**Content:** {row['utm_content']} | **Term:** {row['utm_term']}")
-                st.write(f"**Created:** {row['created_at'][:10]}")
-            
-            with col2:
-                # Action buttons
-                if st.button(f"✏️ Edit", key=f"edit_{row['id']}"):
-                    st.session_state[f"editing_{row['id']}"] = True
-                    st.rerun()
-                
-                if st.button(f"🗑️ Delete", key=f"delete_{row['id']}", type="secondary"):
-                    if delete_utm_link(ss_env.spreadsheet, int(row['id'])):
-                        snack("Link deleted")
-                        st.rerun()
-                    else:
-                        st.error("Failed to delete link")
-                
-                if st.button(f"🧪 Test", key=f"test_{row['id']}"):
-                    with st.spinner("Validating..."):
-                        is_success, message, status_code = test_url_status(row['final_url'])
-                        if is_success:
-                            st.success(f"✅ {message}")
-                        else:
-                            st.error(f"❌ {message}")
-            
-            # Edit form (appears when edit button is clicked)
-            if st.session_state.get(f"editing_{row['id']}", False):
-                st.divider()
-                st.write("**Edit Link:**")
-                
-                with st.form(f"edit_form_{row['id']}"):
-                    edit_base_url = st.text_input("Base URL", value=row['base_url'])
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        edit_campaign = st.text_input("utm_campaign", value=row['utm_campaign'])
-                        edit_source = st.text_input("utm_source", value=row['utm_source'])
-                        edit_medium = st.text_input("utm_medium", value=row['utm_medium'])
-                    with col2:
-                        edit_content = st.text_input("utm_content", value=row['utm_content'])
-                        edit_term = st.text_input("utm_term", value=row['utm_term'])
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.form_submit_button("Save Changes", type="primary"):
-                            # Rebuild final URL
-                            new_params = {
-                                "utm_campaign": edit_campaign,
-                                "utm_source": edit_source,
-                                "utm_medium": edit_medium,
-                                "utm_content": edit_content,
-                                "utm_term": edit_term,
-                            }
-                            new_final_url = build_utm_url(edit_base_url, new_params)
-                            
-                            # Update the link
-                            updated_data = {
-                                "base_url": edit_base_url,
-                                "utm_campaign": edit_campaign,
-                                "utm_source": edit_source,
-                                "utm_medium": edit_medium,
-                                "utm_content": edit_content,
-                                "utm_term": edit_term,
-                                "final_url": new_final_url,
-                            }
-                            
-                            if update_utm_link(ss_env.spreadsheet, int(row['id']), updated_data):
-                                st.session_state[f"editing_{row['id']}"] = False
-                                snack("Link updated")
-                                st.rerun()
-                            else:
-                                st.error("Failed to update link")
-                    
-                    with col2:
-                        if st.form_submit_button("Cancel"):
-                            st.session_state[f"editing_{row['id']}"] = False
-                            st.rerun()
+    # Simple link management
+    st.subheader("Link Actions")
+    link_id_to_delete = st.number_input("Enter Link ID to delete", min_value=0, step=1, value=0)
+    if link_id_to_delete and st.button("Delete Link", type="secondary"):
+        if delete_utm_link(ss_env.spreadsheet, int(link_id_to_delete)):
+            snack("Link deleted")
+            st.rerun()
+        else:
+            st.error("Failed to delete link or link not found")
     
-    # Click tracking preparation
-    st.divider()
-    with st.expander("🔍 Click Tracking Setup", expanded=False):
-        st.write("**Prepare your links for click tracking:**")
+    # Click tracking info
+    with st.expander("Click Tracking Setup", expanded=False):
+        st.write("**Google Analytics:**")
+        st.code("gtag('event', 'utm_click', {'campaign_name': 'your-campaign'});")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write("**Google Analytics:**")
-            st.code("gtag('event', 'utm_click', {'campaign_name': 'your-campaign'});")
-            
-            st.write("**Facebook Pixel:**")
-            st.code("fbq('trackCustom', 'UTMClick', {'campaign': 'your-campaign'});")
-        
-        with col2:
-            st.write("**URL Shortening Services:**")
-            st.write("- Bit.ly: Has built-in analytics")
-            st.write("- TinyURL: Basic click counting")
-            st.write("- Custom: Use your own domain with tracking")
-            
-            st.write("**Redirect Setup:**")
-            st.write("Create a redirect script that logs clicks before forwarding to your UTM URLs.")
+        st.write("**URL Shortening Services:**")
+        st.write("- Bit.ly: Built-in analytics")  
+        st.write("- TinyURL: Basic click counting")
+        st.write("- Custom: Use your own domain with tracking")
             
     with t4:
         presets_tab(ss_env)
