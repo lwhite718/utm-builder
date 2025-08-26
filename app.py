@@ -104,33 +104,81 @@ def _ws(ss: gspread.Spreadsheet, tab: str) -> gspread.Worksheet:
     return ss.worksheet(tab)
 
 
+def _read_df_with_retry(ss: gspread.Spreadsheet, tab: str, max_retries: int = 3) -> pd.DataFrame:
+    """Read dataframe with retry logic and better error handling"""
+    for attempt in range(max_retries):
+        try:
+            ws = _ws(ss, tab)
+            rows = ws.get_all_records()
+            df = pd.DataFrame(rows)
+            if df.empty:
+                df = pd.DataFrame(columns=REQ_TABS[tab])
+            # Coerce columns to exist
+            for col in REQ_TABS[tab]:
+                if col not in df.columns:
+                    df[col] = []
+            return df[REQ_TABS[tab]].copy()
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+                continue
+            else:
+                st.error(f"Failed to read {tab} after {max_retries} attempts: {str(e)}")
+                # Return empty dataframe with correct structure
+                return pd.DataFrame(columns=REQ_TABS[tab])
+
+
 def _read_df(ss: gspread.Spreadsheet, tab: str) -> pd.DataFrame:
-    ws = _ws(ss, tab)
-    rows = ws.get_all_records()
-    df = pd.DataFrame(rows)
-    if df.empty:
-        df = pd.DataFrame(columns=REQ_TABS[tab])
-    # Coerce columns to exist
-    for col in REQ_TABS[tab]:
-        if col not in df.columns:
-            df[col] = []
-    return df[REQ_TABS[tab]].copy()
+    """Wrapper to use retry logic"""
+    return _read_df_with_retry(ss, tab)
+
+
+def _write_df_with_retry(ss: gspread.Spreadsheet, tab: str, df: pd.DataFrame, max_retries: int = 3) -> bool:
+    """Write dataframe with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            ws = _ws(ss, tab)
+            if df.empty:
+                ws.resize(rows=1)
+                ws.update([REQ_TABS[tab]])
+                return True
+            data = [REQ_TABS[tab]] + df.astype(str).values.tolist()
+            ws.resize(rows=len(data), cols=len(REQ_TABS[tab]))
+            ws.update(data)
+            return True
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                st.error(f"Failed to write to {tab} after {max_retries} attempts: {str(e)}")
+                return False
+
+
+def _append_rows_with_retry(ss: gspread.Spreadsheet, tab: str, rows: List[List[str]], max_retries: int = 3) -> bool:
+    """Append rows with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            ws = _ws(ss, tab)
+            ws.append_rows(rows, value_input_option="USER_ENTERED")
+            return True
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                st.error(f"Failed to append to {tab} after {max_retries} attempts: {str(e)}")
+                return False
 
 
 def _write_df(ss: gspread.Spreadsheet, tab: str, df: pd.DataFrame) -> None:
-    ws = _ws(ss, tab)
-    if df.empty:
-        ws.resize(rows=1)
-        ws.update([REQ_TABS[tab]])
-        return
-    data = [REQ_TABS[tab]] + df.astype(str).values.tolist()
-    ws.resize(rows=len(data), cols=len(REQ_TABS[tab]))
-    ws.update(data)
+    """Wrapper to use retry logic"""
+    _write_df_with_retry(ss, tab, df)
 
 
 def _append_rows(ss: gspread.Spreadsheet, tab: str, rows: List[List[str]]) -> None:
-    ws = _ws(ss, tab)
-    ws.append_rows(rows, value_input_option="USER_ENTERED")
+    """Wrapper to use retry logic"""
+    _append_rows_with_retry(ss, tab, rows)
 
 
 def _next_id(df: pd.DataFrame) -> int:
@@ -587,7 +635,7 @@ def sidebar_campaigns(ss_env: SheetsEnv):
 
 def presets_tab(ss_env: SheetsEnv):
     """Template management moved to a main tab"""
-    st.header("📝 Template Presets")
+    st.header("Template Presets")
     st.caption("Create and manage reusable UTM templates organized by category.")
     
     # Template categories
@@ -620,17 +668,25 @@ def presets_tab(ss_env: SheetsEnv):
             elif not t_source.strip() or not t_medium.strip():
                 st.error("Source and medium are required for a template.")
             else:
-                ok = save_template(ss_env.spreadsheet, t_name, t_category, t_source, t_medium, t_content, t_term)
-                if ok:
-                    snack("Template saved")
-                    st.rerun()
-                else:
-                    st.error("A template with that name already exists.")
+                try:
+                    ok = save_template(ss_env.spreadsheet, t_name, t_category, t_source, t_medium, t_content, t_term)
+                    if ok:
+                        snack("Template saved")
+                        st.rerun()
+                    else:
+                        st.error("A template with that name already exists.")
+                except Exception as e:
+                    st.error(f"Error saving template: {str(e)}")
 
     st.divider()
 
     # Display existing templates
-    df = list_templates(ss_env.spreadsheet)
+    try:
+        df = list_templates(ss_env.spreadsheet)
+    except Exception as e:
+        st.error(f"Error loading templates: {str(e)}")
+        return
+        
     if not df.empty:
         st.subheader("Saved Templates")
         
@@ -659,9 +715,12 @@ def presets_tab(ss_env: SheetsEnv):
             with col2:
                 st.write("")  # spacer
                 if to_delete and st.button("Delete Template", type="secondary"):
-                    delete_template(ss_env.spreadsheet, int(to_delete))
-                    snack("Template deleted", icon="🧹")
-                    st.rerun()
+                    try:
+                        delete_template(ss_env.spreadsheet, int(to_delete))
+                        snack("Template deleted")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting template: {str(e)}")
         else:
             st.info(f"No templates in {selected_category} category.")
     else:
@@ -758,8 +817,13 @@ def single_builder(ss_env: SheetsEnv, force_lower: bool, space_style: str, templ
                     "final_url": final_url,
                 }
             ])
-            insert_utm_links(ss_env.spreadsheet, st.session_state.selected_campaign_id, df)
-            snack("Link saved to campaign")
+            
+            with st.spinner("Saving link..."):
+                success = insert_utm_links(ss_env.spreadsheet, st.session_state.selected_campaign_id, df)
+                if success:
+                    snack("Link saved to campaign")
+                else:
+                    st.error("Failed to save link. Please check your internet connection and try again.")
     elif not st.session_state.selected_campaign_id:
         st.info("Select or create a campaign in the sidebar to save links.")
 
